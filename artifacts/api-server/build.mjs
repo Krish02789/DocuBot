@@ -1,0 +1,171 @@
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { build as esbuild } from "esbuild";
+import esbuildPluginPino from "esbuild-plugin-pino";
+import { rm, copyFile } from "node:fs/promises";
+
+// Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
+globalThis.require = createRequire(import.meta.url);
+
+const artifactDir = path.dirname(fileURLToPath(import.meta.url));
+
+async function buildAll() {
+  const distDir = path.resolve(artifactDir, "dist");
+  await rm(distDir, { recursive: true, force: true });
+
+  // Resolve the pdfjs worker from node_modules so it can be served as a worker thread
+  const req = createRequire(import.meta.url);
+  const pdfjsWorkerSrc = req.resolve("pdfjs-dist/build/pdf.worker.min.mjs");
+
+  await esbuild({
+    entryPoints: [path.resolve(artifactDir, "src/index.ts")],
+    platform: "node",
+    bundle: true,
+    format: "esm",
+    outdir: distDir,
+    outExtension: { ".js": ".mjs" },
+    logLevel: "info",
+    // Some packages may not be bundleable, so we externalize them, we can add more here as needed.
+    // Some of the packages below may not be imported or installed, but we're adding them in case they are in the future.
+    // Examples of unbundleable packages:
+    // - uses native modules and loads them dynamically (e.g. sharp)
+    // - use path traversal to read files (e.g. @google-cloud/secret-manager loads sibling .proto files)
+    external: [
+      "*.node",
+      "sharp",
+      "better-sqlite3",
+      "sqlite3",
+      "canvas",
+      "bcrypt",
+      "argon2",
+      "fsevents",
+      "re2",
+      "farmhash",
+      "xxhash-addon",
+      "bufferutil",
+      "utf-8-validate",
+      "ssh2",
+      "cpu-features",
+      "dtrace-provider",
+      "isolated-vm",
+      "lightningcss",
+      "pg-native",
+      "oracledb",
+      "mongodb-client-encryption",
+      "nodemailer",
+      "handlebars",
+      "knex",
+      "typeorm",
+      "protobufjs",
+      "onnxruntime-node",
+      "@tensorflow/*",
+      "@prisma/client",
+      "@mikro-orm/*",
+      "@grpc/*",
+      "@swc/*",
+      "@aws-sdk/*",
+      "@azure/*",
+      "@opentelemetry/*",
+      "@google-cloud/*",
+      "@google/*",
+      "googleapis",
+      "firebase-admin",
+      "@parcel/watcher",
+      "@sentry/profiling-node",
+      "@tree-sitter/*",
+      "aws-sdk",
+      "classic-level",
+      "dd-trace",
+      "ffi-napi",
+      "grpc",
+      "hiredis",
+      "kerberos",
+      "leveldown",
+      "miniflare",
+      "mysql2",
+      "newrelic",
+      "odbc",
+      "piscina",
+      "realm",
+      "ref-napi",
+      "rocksdb",
+      "sass-embedded",
+      "sequelize",
+      "serialport",
+      "snappy",
+      "tinypool",
+      "usb",
+      "workerd",
+      "wrangler",
+      "zeromq",
+      "zeromq-prebuilt",
+      "playwright",
+      "puppeteer",
+      "puppeteer-core",
+      "electron",
+    ],
+    sourcemap: "linked",
+    plugins: [
+      esbuildPluginPino({ transports: ["pino-pretty"] })
+    ],
+    // Make sure packages that are cjs only (e.g. express) but are bundled continue to work in our esm output file
+    banner: {
+      js: `import { createRequire as __bannerCrReq } from 'node:module';
+import __bannerPath from 'node:path';
+import __bannerUrl from 'node:url';
+
+globalThis.require = __bannerCrReq(import.meta.url);
+globalThis.__filename = __bannerUrl.fileURLToPath(import.meta.url);
+globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
+
+// Polyfills required by pdfjs-dist canvas module at module load time.
+// We only use pdfjs for text extraction, so these stubs are never actually called.
+if (typeof globalThis.DOMMatrix === 'undefined') {
+  globalThis.DOMMatrix = class DOMMatrix {
+    constructor() {
+      this.a=1;this.b=0;this.c=0;this.d=1;this.e=0;this.f=0;
+      this.m11=1;this.m12=0;this.m13=0;this.m14=0;
+      this.m21=0;this.m22=1;this.m23=0;this.m24=0;
+      this.m31=0;this.m32=0;this.m33=1;this.m34=0;
+      this.m41=0;this.m42=0;this.m43=0;this.m44=1;
+      this.is2D=true;this.isIdentity=true;
+    }
+    multiply(){return this;} translate(){return this;} scale(){return this;}
+    inverse(){return this;} transformPoint(p){return p;}
+  };
+}
+if (typeof globalThis.ImageData === 'undefined') {
+  globalThis.ImageData = class ImageData {
+    constructor(w,h){this.width=w;this.height=h;this.data=new Uint8ClampedArray(w*h*4);}
+  };
+}
+if (typeof globalThis.Path2D === 'undefined') {
+  globalThis.Path2D = class Path2D {
+    moveTo(){}lineTo(){}arc(){}rect(){}closePath(){}addPath(){}
+  };
+}
+    `,
+    },
+  });
+
+  // Copy the pdfjs worker alongside the bundle so the runtime can load it as a Worker thread
+  await copyFile(pdfjsWorkerSrc, path.join(distDir, "pdf.worker.min.mjs"));
+
+  // Copy standard font data so pdfjs can decode Type1/TrueType fonts during text extraction
+  const { cp } = await import("node:fs/promises");
+  const { default: fsSync } = await import("node:fs");
+  const fontsDir = path.resolve(path.dirname(pdfjsWorkerSrc), "../standard_fonts");
+  const fontsDest = path.join(distDir, "standard_fonts");
+  if (!fsSync.existsSync(fontsDest)) {
+    fsSync.mkdirSync(fontsDest, { recursive: true });
+  }
+  for (const f of fsSync.readdirSync(fontsDir)) {
+    await copyFile(path.join(fontsDir, f), path.join(fontsDest, f));
+  }
+}
+
+buildAll().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: docubot
+    runtime: node
+    buildCommand: bash build.sh
+    startCommand: NODE_ENV=production node --enable-source-maps artifacts/api-server/dist/index.mjs
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: GEMINI_API_KEY
+        sync: false

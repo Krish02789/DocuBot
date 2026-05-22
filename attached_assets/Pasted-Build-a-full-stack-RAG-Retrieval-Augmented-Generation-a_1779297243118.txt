@@ -1,0 +1,443 @@
+Build a full-stack RAG (Retrieval-Augmented Generation) application called 
+"DocuBOT" where users upload PDF documents and chat with them using AI.
+
+## Project Structure
+docubot/
+├── README.md
+├── Dockerfile
+├── docker-compose.yml
+├── .env.example
+├── backend/
+│   ├── main.py
+│   ├── requirements.txt
+│   └── app/
+│       ├── __init__.py
+│       ├── config.py
+│       ├── models.py
+│       ├── routes/
+│       │   ├── __init__.py
+│       │   ├── upload.py
+│       │   └── chat.py
+│       └── core/
+│           ├── __init__.py
+│           ├── parser.py
+│           ├── chunker.py
+│           ├── embedder.py
+│           └── retriever.py
+└── frontend/
+    ├── package.json
+    ├── index.html
+    └── src/
+        ├── main.jsx
+        ├── App.jsx
+        ├── components/
+        │   ├── ChatWindow.jsx
+        │   ├── MessageBubble.jsx
+        │   ├── PDFUploader.jsx
+        │   └── TypingIndicator.jsx
+        └── hooks/
+            └── useChat.js
+
+## Tech Stack
+Backend: Python 3.11, FastAPI, LangChain, OpenAI API, FAISS, PyMuPDF
+Frontend: React.js, Tailwind CSS, Axios
+Deployment: Docker, Hugging Face Spaces
+
+## Backend — requirements.txt
+fastapi==0.111.0
+uvicorn==0.29.0
+python-multipart==0.0.9
+langchain==0.2.0
+langchain-openai==0.1.0
+langchain-community==0.2.0
+openai==1.30.0
+faiss-cpu==1.8.0
+pymupdf==1.24.0
+pydantic==2.7.0
+pydantic-settings==2.2.0
+python-dotenv==1.0.0
+tiktoken==0.7.0
+
+## config.py — Settings
+```python
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    openai_api_key: str
+    embedding_model: str = "text-embedding-3-small"
+    chat_model: str = "gpt-3.5-turbo"
+    chunk_size: int = 800
+    chunk_overlap: int = 100
+    retrieval_k: int = 4
+    max_file_size_mb: int = 10
+
+    class Config:
+        env_file = ".env"
+
+settings = Settings()
+```
+
+## models.py — Pydantic Models
+```python
+from pydantic import BaseModel
+from typing import Literal
+
+class UploadResponse(BaseModel):
+    doc_id: str
+    filename: str
+    total_chunks: int
+    message: str
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+class ChatRequest(BaseModel):
+    doc_id: str
+    message: str
+    history: list[ChatMessage] = []
+
+class ChatResponse(BaseModel):
+    answer: str
+    sources: list[str]   # relevant chunk excerpts used
+    doc_id: str
+```
+
+## core/parser.py — PDF Text Extraction
+```python
+import fitz  # PyMuPDF
+from pathlib import Path
+
+def extract_text_from_pdf(file_path: str) -> str:
+    """
+    Extract all text from a PDF file using PyMuPDF.
+    - Open the PDF
+    - Iterate over every page
+    - Extract text from each page
+    - Join with double newlines between pages
+    - Return the full text string
+    - Raise ValueError if PDF is empty or unreadable
+    - Raise FileNotFoundError if path doesn't exist
+    """
+
+def get_pdf_metadata(file_path: str) -> dict:
+    """
+    Return dict with: page_count, file_size_kb, filename
+    """
+```
+
+## core/chunker.py — Semantic Chunking
+```python
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from app.config import settings
+
+def chunk_text(text: str) -> list[str]:
+    """
+    Split text into overlapping chunks using RecursiveCharacterTextSplitter.
+    - Use chunk_size and chunk_overlap from settings
+    - Separators: ["\n\n", "\n", ". ", " ", ""]
+    - Return list of chunk strings
+    - Filter out chunks shorter than 50 characters
+    """
+
+def count_tokens(text: str) -> int:
+    """
+    Count tokens in a string using tiktoken (cl100k_base encoding).
+    Used to validate chunks don't exceed model context limits.
+    """
+```
+
+## core/embedder.py — FAISS Vector Store
+```python
+from langchain_openai import OpenAIEmbeddings
+from langchain_community.vectorstores import FAISS
+from app.config import settings
+
+# In-memory store: maps doc_id -> FAISS vector store
+_stores: dict[str, FAISS] = {}
+
+def embed_and_store(doc_id: str, chunks: list[str]) -> int:
+    """
+    - Create OpenAIEmbeddings with settings.embedding_model
+    - Create FAISS vector store from chunks
+    - Store in _stores dict with doc_id as key
+    - Return number of chunks embedded
+    """
+
+def get_store(doc_id: str) -> FAISS:
+    """
+    Retrieve FAISS store by doc_id.
+    Raise KeyError with clear message if doc_id not found.
+    """
+
+def delete_store(doc_id: str) -> None:
+    """Remove a store from memory."""
+
+def list_docs() -> list[str]:
+    """Return all doc_ids currently in memory."""
+```
+
+## core/retriever.py — RAG Chain
+```python
+from langchain_openai import ChatOpenAI
+from langchain.chains import ConversationalRetrievalChain
+from langchain.memory import ConversationBufferMemory
+from app.core.embedder import get_store
+from app.config import settings
+from app.models import ChatMessage
+
+def build_rag_chain(doc_id: str):
+    """
+    Build a ConversationalRetrievalChain:
+    - Get FAISS store for doc_id
+    - Create retriever with k=settings.retrieval_k
+    - Create ChatOpenAI with settings.chat_model, temperature=0
+    - Return the chain (no memory — we pass history manually)
+    """
+
+def query_document(
+    doc_id: str,
+    question: str,
+    history: list[ChatMessage]
+) -> dict:
+    """
+    Run a RAG query:
+    - Build the chain
+    - Convert history list to LangChain format: 
+      list of (human_message, ai_message) tuples
+    - Call chain with question and chat_history
+    - Return dict:
+      {
+        "answer": str,
+        "source_documents": list of Document objects
+      }
+    """
+```
+
+## routes/upload.py — Upload Endpoint
+```python
+from fastapi import APIRouter, UploadFile, File, HTTPException
+import uuid, tempfile, os
+from app.models import UploadResponse
+from app.core.parser import extract_text_from_pdf
+from app.core.chunker import chunk_text
+from app.core.embedder import embed_and_store
+
+router = APIRouter()
+
+@router.post("/upload", response_model=UploadResponse)
+async def upload_pdf(file: UploadFile = File(...)):
+    """
+    1. Validate file is a PDF (check content_type and .pdf extension)
+    2. Validate file size <= settings.max_file_size_mb
+    3. Save to a temp file
+    4. Extract text with parser
+    5. Chunk text with chunker
+    6. Embed and store with embedder
+    7. Return UploadResponse with generated doc_id
+    8. Clean up temp file in finally block
+    9. Raise HTTPException 400 for invalid files
+    10. Raise HTTPException 500 for processing errors
+    """
+```
+
+## routes/chat.py — Chat Endpoint (Streaming)
+```python
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from app.models import ChatRequest, ChatResponse
+from app.core.retriever import query_document
+from app.core.embedder import get_store
+import json
+
+router = APIRouter()
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """
+    1. Verify doc_id exists in embedder store
+    2. Call query_document with doc_id, message, history
+    3. Extract source excerpts from source_documents
+       (first 200 chars of each retrieved chunk)
+    4. Return ChatResponse with answer and sources
+    5. Raise HTTPException 404 if doc_id not found
+    6. Raise HTTPException 500 on query failure
+    """
+
+@router.get("/documents")
+async def list_documents():
+    """Return list of all doc_ids currently loaded in memory."""
+
+@router.delete("/documents/{doc_id}")
+async def delete_document(doc_id: str):
+    """Remove a document's vector store from memory."""
+```
+
+## main.py — FastAPI App
+```python
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from app.routes.upload import router as upload_router
+from app.routes.chat import router as chat_router
+
+app = FastAPI(title="DocuBOT API", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(upload_router, prefix="/api")
+app.include_router(chat_router, prefix="/api")
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+```
+
+## Frontend — App.jsx
+Two-panel layout:
+- LEFT PANEL (35% width): PDF upload area
+  - Drag and drop zone with dashed border
+  - "Upload PDF" button
+  - Shows filename and chunk count after upload
+  - Loading spinner while processing
+  - Error message if upload fails
+
+- RIGHT PANEL (65% width): Chat interface
+  - Chat window showing message history
+  - User messages aligned right (blue bubble)
+  - Assistant messages aligned left (gray bubble)
+  - Typing indicator (animated dots) while waiting
+  - Input box at bottom with Send button
+  - Disabled state when no document is uploaded
+  - "Upload a PDF to start chatting" placeholder
+
+## Frontend — useChat.js hook
+```javascript
+// Custom hook managing:
+// - messages state: array of {role, content}
+// - isLoading state
+// - docId state
+// - uploadPDF(file) function:
+//     POST /api/upload with FormData
+//     Set docId from response
+//     Return {filename, totalChunks}
+// - sendMessage(text) function:
+//     Append user message to messages
+//     POST /api/chat with {doc_id, message, history}
+//     Append assistant response to messages
+//     Handle errors gracefully
+```
+
+## Frontend — MessageBubble.jsx
+```jsx
+// Props: { role: "user" | "assistant", content: string, sources?: string[] }
+// User bubble: right-aligned, blue background (#3B82F6), white text
+// Assistant bubble: left-aligned, gray background (#F3F4F6), dark text
+// Show "Sources used:" collapsible section if sources array is non-empty
+// Render content with proper line breaks (pre-wrap)
+```
+
+## Frontend — PDFUploader.jsx
+```jsx
+// Props: { onUpload: (docInfo) => void, isLoading: bool }
+// Drag and drop zone using HTML5 drag events
+// File input fallback button
+// Show file name preview before upload
+// Progress indication during upload
+// Success state: show green checkmark + "filename.pdf loaded (N chunks)"
+// Error state: show red message
+// Only accept .pdf files
+```
+
+## Dockerfile (multi-stage: backend + frontend)
+```dockerfile
+# Stage 1: Build React frontend
+FROM node:20-slim AS frontend-build
+WORKDIR /frontend
+COPY frontend/package.json .
+RUN npm install
+COPY frontend/ .
+RUN npm run build
+
+# Stage 2: Python backend + serve frontend
+FROM python:3.11-slim
+WORKDIR /app
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY backend/ .
+COPY --from=frontend-build /frontend/dist ./static
+
+# Serve static files from FastAPI
+# Mount /static at root using StaticFiles
+
+EXPOSE 7860
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
+```
+
+## .env.example
+OPENAI_API_KEY=your-key-here
+EMBEDDING_MODEL=text-embedding-3-small
+CHAT_MODEL=gpt-3.5-turbo
+CHUNK_SIZE=800
+CHUNK_OVERLAP=100
+RETRIEVAL_K=4
+MAX_FILE_SIZE_MB=10
+
+## README.md — Must include
+1. What DocuBOT does (2-3 sentences)
+2. Architecture diagram in ASCII showing:
+   PDF → Parser → Chunker → Embedder → FAISS
+   User Query → Retriever → LLM → Answer
+3. Installation steps (Docker and manual)
+4. Environment variables table
+5. API endpoints table:
+   POST /api/upload
+   POST /api/chat
+   GET  /api/documents
+   DELETE /api/documents/{doc_id}
+6. How RAG works — explain in 5 bullet points
+7. Limitations section (honest about in-memory storage)
+
+## Key behaviours to implement correctly
+
+RAG Pipeline flow (get this exactly right):
+1. User uploads PDF
+2. PyMuPDF extracts raw text page by page
+3. RecursiveCharacterTextSplitter splits into overlapping chunks
+4. OpenAI embeddings convert each chunk to a vector
+5. FAISS stores all vectors in memory indexed by doc_id
+6. User asks a question
+7. Question is embedded using same model
+8. FAISS finds top-K most similar chunks (cosine similarity)
+9. Retrieved chunks + question + chat history sent to GPT
+10. GPT answers using ONLY the retrieved context
+11. Answer + source excerpts returned to frontend
+
+System prompt for the LLM (use this exactly):
+"""
+You are DocuBOT, a helpful assistant that answers questions about 
+uploaded documents. Answer ONLY based on the provided context. 
+If the answer is not in the context, say "I couldn't find that 
+information in the document." Be concise and accurate.
+"""
+
+Error handling requirements:
+- Empty PDF: return 400 "PDF appears to be empty or unreadable"
+- PDF too large: return 400 "File exceeds 10MB limit"  
+- Non-PDF file: return 400 "Only PDF files are accepted"
+- doc_id not found: return 404 "Document not found. Please upload again."
+- OpenAI API error: return 500 "AI service temporarily unavailable"
+
+## Final working demo
+When complete, I should be able to:
+1. Open the app in browser
+2. Drag and drop a PDF (e.g. a research paper)
+3. See "research_paper.pdf loaded (47 chunks)"
+4. Type "What is the main conclusion of this paper?"
+5. See a streamed answer with source excerpts shown below it
+6. Ask follow-up questions that use chat history for context
+7. Upload a different PDF and start a new conversation
