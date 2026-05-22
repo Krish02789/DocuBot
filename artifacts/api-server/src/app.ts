@@ -33,8 +33,6 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);
 
-// In production, serve the React frontend from the pre-built static files.
-// The STATIC_FILES_PATH env var can override the default relative path.
 if (process.env.NODE_ENV === "production") {
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const staticDir =
@@ -43,8 +41,8 @@ if (process.env.NODE_ENV === "production") {
 
   app.use(express.static(staticDir));
 
-  // Catch-all: serve index.html so client-side routing works
-  app.get("(.*)", (_req, res) => {aticDir, "index.html"));
+  app.get("(.*)", (_req, res) => {
+    res.sendFile(path.join(staticDir, "index.html"));
   });
 }
 
