@@ -44,7 +44,7 @@ if (process.env.NODE_ENV === "production") {
   app.use(express.static(staticDir));
 
   // Catch-all: serve index.html so client-side routing works
-  app.get("*", (_req, res) => {
+  app.get("(.*)", (_req, res) => { => {
     res.sendFile(path.join(staticDir, "index.html"));
   });
 }
